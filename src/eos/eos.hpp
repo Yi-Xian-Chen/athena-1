@@ -140,10 +140,19 @@ class EquationOfState {
   Real PresFromRhoEg(Real rho, Real egas, Real* s);
   Real EgasFromRhoP(Real rho, Real pres, Real* r);
   Real AsqFromRhoP(Real rho, Real pres, const Real* r);
+  Real TFromRhoP(Real rho, Real pres, Real* r);
+  Real PresFromRhoT(Real rho, Real temp, Real* r);
+  Real EgasFromRhoT(Real rho, Real temp, Real* r);
+  Real TFromRhoEgas(Real rho, Real egas, Real* s);
+  Real XalphaFromRhoTYe(Real rho, Real temp, Real ye);
   // overload eos calls without tracers for backward compatibility with pgens
   Real PresFromRhoEg(Real rho, Real egas);
   Real EgasFromRhoP(Real rho, Real pres);
   Real AsqFromRhoP(Real rho, Real pres);
+  Real TFromRhoP(Real rho, Real pres);
+  Real PresFromRhoT(Real rho, Real temp);
+  Real EgasFromRhoT(Real rho, Real temp);
+  Real TFromRhoEgas(Real rho, Real egas);
   Real GetIsoSoundSpeed() const {return iso_sound_speed_;}
   Real GetDensityFloor() const {return density_floor_;}
   Real GetPressureFloor() const {return pressure_floor_;}

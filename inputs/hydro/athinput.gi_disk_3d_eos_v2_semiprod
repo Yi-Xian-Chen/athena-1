@@ -1,0 +1,95 @@
+<comment>
+problem   = Semi-production 3D GI disk with Helmholtz alpha EOS.
+configure = --prob=gi_disk_3d_eos_v2 --coord=spherical_polar --eos=general/helmholtz --nscalars=1 --nghost=2 -mpi
+
+<job>
+problem_id = gi_disk_3d_eos_v2_semiprod
+
+<output1>
+file_type  = athdf
+variable   = prim
+dt         = 1.0e-3
+
+<output2>
+file_type  = athdf
+variable   = user_out_var
+dt         = 1.0e-3
+
+<time>
+cfl_number = 0.2
+nlim       = -1
+tlim       = 1.0e-2
+integrator = vl2
+xorder     = 2
+ncycle_out = 10
+
+<mesh>
+x1rat       = 1.00555
+nx1         = 256
+x1min       = 6.4604298982712977e7
+x1max       = 2.658005443860191e8
+ix1_bc      = user
+ox1_bc      = user
+
+x2rat       = 1.0
+nx2         = 128
+x2min       = 1.0707963267948966
+x2max       = 2.0707963267948966
+ix2_bc      = outflow
+ox2_bc      = outflow
+
+x3rat       = 1.0
+nx3         = 128
+x3min       = 0.0
+x3max       = 6.283185307179586
+ix3_bc      = periodic
+ox3_bc      = periodic
+
+num_threads = 1
+
+<meshblock>
+nx1 = 32
+nx2 = 16
+nx3 = 16
+
+<hydro>
+#gamma            = 1.666666666666667
+#iso_sound_speed  = 1.0e8
+dfloor           = 1.0e7
+pfloor           = 1.0e20
+eos_file_name    = data/eos/helm_table.dat
+eos_file_type    = helm
+helm_assume_defaults = true
+helm_ye_index    = 0
+
+<problem>
+GM               = 1.3271645321000002e27
+r_in_rg          = 50.0
+r_out_rg         = 151.0
+r_ref_rg         = 100.0
+Q_ref            = 1.0
+#cs_frac          = 0.03
+pressure_over_rho_ref = 1.0e17
+pressure_over_rho_slope = -1.0
+Sigma_slope      = -2.0
+Ye0              = 0.1
+rho_floor        = 1.0e7
+pressure_corrected_rotation = false
+inner_bc_mode    = 2
+outer_bc_mode    = 2
+enable_qw_source = true
+qw_rho_min       = 2.0e7
+qw_energy_fraction_limit = 0.1
+ye_floor         = 1.0e-6
+ye_ceil          = 0.999999
+#vr               = 0.0
+#source_radius    = 6.4604298982712977e7
+#qdot_scale       = 1.0
+#yedot_scale      = 1.0
+#L_nu             = 0.0
+#L_nubar          = 0.0
+#L_mu             = 0.0
+#eps_nu           = 10.0
+#eps_nubar        = 10.0
+#eps_mu           = 10.0
+#ye_source_enabled = false
