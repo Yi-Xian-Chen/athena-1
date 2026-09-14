@@ -6,12 +6,25 @@
 //! \file gi_disk_3d_eos_v2.cpp
 //! \brief 3D rotating GI disk initial conditions with weak sources for Helmholtz EOS.
 
+#ifndef GI_DISK_PGEN_NAME
+#define GI_DISK_PGEN_NAME "gi_disk_3d_eos_v2"
+#endif
+
+#ifndef GI_DISK_PRESSURE_CORRECTED_DEFAULT
+#define GI_DISK_PRESSURE_CORRECTED_DEFAULT false
+#endif
+
+#ifndef GI_DISK_ENABLE_MESHGEN
+#define GI_DISK_ENABLE_MESHGEN false
+#endif
+
 // C++ headers
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
 #include <sstream>
+#include <string>
 
 // Athena++ headers
 #include "../athena.hpp"
@@ -42,11 +55,18 @@ Real vr_init;
 int ye_index;
 bool ye_source_enabled;
 Real ye_eq, ye_tau;
-bool enable_qw_source, pressure_corrected_rotation;
+bool enable_qw_source, pressure_corrected_rotation, repair_ye_density_floor;
+bool clamp_ye_conserved;
+std::string user_bc;
 Real source_radius, source_radius_inv2;
 Real l_nu, l_nubar, l_mu, eps_nu, eps_nubar, eps_mu;
 Real qdot_scale, yedot_scale, qw_rho_min, qw_energy_fraction_limit, ye_floor, ye_ceil;
 int inner_bc_mode, outer_bc_mode;
+
+#if GI_DISK_ENABLE_MESHGEN
+int nth_lo, nth_hi;
+Real h_hi, dth_pole, dth_mid, mesh_gamma, mesh_transition_cells;
+#endif
 
 Real CylRadius(Real r, Real theta);
 Real SigmaAtR(Real r_cyl);
@@ -79,28 +99,71 @@ void DiskInnerX1Diode(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
 void DiskOuterX1Diode(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
                       FaceField &b, Real time, Real dt,
                       int il, int iu, int jl, int ju, int kl, int ku, int ngh);
+void DiskInnerX1Fixed(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                      FaceField &b, Real time, Real dt,
+                      int il, int iu, int jl, int ju, int kl, int ku, int ngh);
+void DiskOuterX1Fixed(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                      FaceField &b, Real time, Real dt,
+                      int il, int iu, int jl, int ju, int kl, int ku, int ngh);
+#if GI_DISK_ENABLE_MESHGEN
+Real DiskThetaMeshGen(Real x, RegionSize rs);
+#endif
 
 } // namespace
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
   if (std::strcmp(COORDINATE_SYSTEM, "spherical_polar") != 0) {
     std::stringstream msg;
-    msg << "### FATAL ERROR in gi_disk_3d_eos_v2" << std::endl
+    msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
         << "This problem generator requires --coord=spherical_polar.";
     ATHENA_ERROR(msg);
   }
   if (!GENERAL_EOS) {
     std::stringstream msg;
-    msg << "### FATAL ERROR in gi_disk_3d_eos_v2" << std::endl
+    msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
         << "This problem generator requires --eos=general/helmholtz.";
     ATHENA_ERROR(msg);
   }
   if (NSCALARS <= 0) {
     std::stringstream msg;
-    msg << "### FATAL ERROR in gi_disk_3d_eos_v2" << std::endl
+    msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
         << "This problem generator requires at least one passive scalar for Ye.";
     ATHENA_ERROR(msg);
   }
+
+#if GI_DISK_ENABLE_MESHGEN
+  if (pin->GetOrAddReal("mesh", "x2rat", 1.0) < 0.0) {
+    nth_lo = pin->GetInteger("mesh", "nth_lo");
+    nth_hi = pin->GetInteger("mesh", "nth_hi");
+    h_hi = pin->GetReal("mesh", "h_hi");
+    dth_pole = pin->GetReal("mesh", "dth_pole");
+    dth_mid = h_hi/static_cast<Real>(nth_hi);
+    const Real outer_angle = 0.5*PI - h_hi;
+    const Real denominator = nth_lo*dth_pole - outer_angle;
+    const Real ratio_log = std::log(dth_pole/dth_mid);
+    mesh_gamma = (dth_pole*ratio_log + dth_mid - dth_pole)/denominator;
+    mesh_transition_cells = ratio_log/mesh_gamma;
+    const bool full_polar =
+        std::abs(pin->GetReal("mesh", "x2min")) < 1.0e-12
+        && std::abs(pin->GetReal("mesh", "x2max") - PI) < 1.0e-12;
+    const int nx2 = pin->GetInteger("mesh", "nx2");
+    if (!full_polar || nth_lo <= 0 || nth_hi <= 0
+        || 2*(nth_lo + nth_hi) != nx2 || h_hi <= 0.0 || h_hi >= 0.5*PI
+        || dth_pole <= dth_mid || denominator <= 0.0
+        || !std::isfinite(mesh_gamma) || mesh_gamma <= 0.0
+        || mesh_transition_cells > nth_lo + 1.0e-12) {
+      std::stringstream msg;
+      msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << " theta mesh generator\n"
+          << "Require a full [0,pi] mesh, nx2=2*(nth_hi+nth_lo), and a smooth "
+          << "transition fitting within nth_lo cells. Got dtheta_mid=" << dth_mid
+          << ", dtheta_pole=" << dth_pole
+          << ", transition_cells=" << mesh_transition_cells
+          << ", nth_lo=" << nth_lo << ".";
+      ATHENA_ERROR(msg);
+    }
+    EnrollUserMeshGenerator(X2DIR, DiskThetaMeshGen);
+  }
+#endif
 
   const Real m_msun = pin->GetOrAddReal("problem", "M_central_msun", 3.0);
   const Real gm_default = 6.67430e-8*m_msun*msun_cgs;
@@ -134,8 +197,13 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   ye_eq = pin->GetOrAddReal("problem", "ye_eq", ye_init);
   ye_tau = pin->GetOrAddReal("problem", "ye_tau", 1.0e30);
   pressure_corrected_rotation =
-      pin->GetOrAddBoolean("problem", "pressure_corrected_rotation", false);
+      pin->GetOrAddBoolean("problem", "pressure_corrected_rotation",
+                           GI_DISK_PRESSURE_CORRECTED_DEFAULT);
   enable_qw_source = pin->GetOrAddBoolean("problem", "enable_qw_source", false);
+  repair_ye_density_floor =
+      pin->GetOrAddBoolean("problem", "repair_ye_density_floor", false);
+  clamp_ye_conserved =
+      pin->GetOrAddBoolean("problem", "clamp_ye_conserved", false);
   source_radius = pin->GetOrAddReal("problem", "source_radius", pin->GetReal("mesh", "x1min"));
   source_radius_inv2 = 1.0/SQR(source_radius);
   qdot_scale = pin->GetOrAddReal("problem", "qdot_scale", 1.0);
@@ -155,6 +223,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   inner_bc_mode = pin->GetOrAddInteger("problem", "inner_bc_mode", 2);
   outer_bc_mode = pin->GetOrAddInteger("problem", "outer_bc_mode", 2);
+  user_bc = pin->GetOrAddString("problem", "user_bc", "diode");
 
   if (r_in <= 0.0 || r_out <= r_in || r_ref <= 0.0 || q_ref <= 0.0
       || poverrho_ref <= 0.0 || sigma_ref <= 0.0 || rho_floor <= 0.0
@@ -164,30 +233,66 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       || eps_mu <= 0.0 || qdot_scale < 0.0 || yedot_scale < 0.0
       || qw_rho_min < 0.0 || qw_energy_fraction_limit < 0.0
       || ye_floor < 0.0 || ye_ceil > 1.0 || ye_floor >= ye_ceil
-      || t_vacuum == 0.0) {
+      || t_vacuum == 0.0 || (user_bc != "diode" && user_bc != "fixed")) {
     std::stringstream msg;
-    msg << "### FATAL ERROR in gi_disk_3d_eos_v2" << std::endl
+    msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
         << "Invalid disk parameters.";
     ATHENA_ERROR(msg);
   }
 
-  if (ye_source_enabled || enable_qw_source) EnrollUserExplicitSourceFunction(DiskSourceTerms);
+  if (ye_source_enabled || enable_qw_source || repair_ye_density_floor
+      || clamp_ye_conserved) {
+    EnrollUserExplicitSourceFunction(DiskSourceTerms);
+  }
   if (mesh_bcs[BoundaryFace::inner_x1] == GetBoundaryFlag("user")) {
-    if (inner_bc_mode == 2) EnrollUserBoundaryFunction(BoundaryFace::inner_x1, DiskInnerX1Diode);
+    if (inner_bc_mode == 2) {
+      EnrollUserBoundaryFunction(BoundaryFace::inner_x1,
+          user_bc == "fixed" ? DiskInnerX1Fixed : DiskInnerX1Diode);
+    }
   }
   if (mesh_bcs[BoundaryFace::outer_x1] == GetBoundaryFlag("user")) {
-    if (outer_bc_mode == 2) EnrollUserBoundaryFunction(BoundaryFace::outer_x1, DiskOuterX1Diode);
+    if (outer_bc_mode == 2) {
+      EnrollUserBoundaryFunction(BoundaryFace::outer_x1,
+          user_bc == "fixed" ? DiskOuterX1Fixed : DiskOuterX1Diode);
+    }
   }
 
   if (Globals::my_rank == 0) {
-    std::cout << "gi_disk_3d_eos_v2: GM=" << gm_cgs << ", rg=" << rg_cgs
+    std::cout << GI_DISK_PGEN_NAME << ": GM=" << gm_cgs << ", rg=" << rg_cgs
               << " cm, Q_ref=" << q_ref << ", Sigma_ref=" << sigma_ref
               << ", P/rho_ref=" << poverrho_ref << ", Ye0=" << ye_init
               << ", Ye_vacuum=" << ye_vacuum
+              << ", pressure_rotation=" << pressure_corrected_rotation
+              << ", user_bc=" << user_bc
               << ", QW=" << enable_qw_source
+              << ", repair_Ye_floor=" << repair_ye_density_floor
+              << ", clamp_rhoYe=" << clamp_ye_conserved
               << std::endl;
   }
 }
+
+#if GI_DISK_ENABLE_MESHGEN
+namespace {
+Real DiskThetaMeshGen(Real x, RegionSize rs) {
+  Real sign = 1.0;
+  if (x > 0.5) sign = -1.0;
+  Real cell_coordinate = std::abs(x - 0.5)*2.0*(nth_lo + nth_hi);
+  Real angle_from_midplane;
+  if (cell_coordinate <= nth_hi) {
+    angle_from_midplane = cell_coordinate*dth_mid;
+  } else if (cell_coordinate <= nth_hi + mesh_transition_cells) {
+    angle_from_midplane = nth_hi*dth_mid
+        + dth_mid/mesh_gamma
+          *(std::exp((cell_coordinate - nth_hi)*mesh_gamma) - 1.0);
+  } else {
+    angle_from_midplane = 0.5*PI
+        - dth_pole*(nth_hi + nth_lo - cell_coordinate);
+  }
+  const Real normalized = 0.5 - 0.5*(angle_from_midplane/(0.5*PI))*sign;
+  return normalized*rs.x2max + (1.0 - normalized)*rs.x2min;
+}
+} // namespace
+#endif
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
   AllocateUserOutputVariables(8);
@@ -249,10 +354,13 @@ void MeshBlock::UserWorkBeforeOutput(ParameterInput *pin) {
           const Real eta = QWEta(rho, temp, ye);
           Real qdot_erg = qdot_scale*QdotQW(temp_mev, rho, x, ypfree, ynfree, eta, le)
               *1.602176634e-6;
-          if (rho < qw_rho_min) qdot_erg = std::max(0.0, qdot_erg);
+          Real yedot = yedot_scale*YeSource(temp_mev, ye, ypfree, ynfree, x, rho, le);
+          if (rho <= qw_rho_min) {
+            qdot_erg = std::max(0.0, qdot_erg);
+            yedot = std::max(0.0, yedot);
+          }
           user_out_var(4,k,j,i) = qdot_erg;
-          user_out_var(5,k,j,i) = (rho < qw_rho_min && qdot_erg <= 0.0) ? 0.0
-              : yedot_scale*YeSource(temp_mev, ye, ypfree, ynfree, x, rho, le);
+          user_out_var(5,k,j,i) = yedot;
         }
       }
     }
@@ -386,7 +494,11 @@ void DiskSourceTerms(MeshBlock *pmb, const Real time, const Real dt,
           const Real eta = QWEta(rho, temp, ye);
           Real qdot_erg = qdot_scale
               *QdotQW(temp_mev, rho, x, ypfree, ynfree, eta, le)*1.602176634e-6;
-          if (rho < qw_rho_min) qdot_erg = std::max(0.0, qdot_erg);
+          Real yedot = yedot_scale*YeSource(temp_mev, ye, ypfree, ynfree, x, rho, le);
+          if (rho <= qw_rho_min) {
+            qdot_erg = std::max(0.0, qdot_erg);
+            yedot = std::max(0.0, yedot);
+          }
           Real de = dt*rho*qdot_erg;
           const Real ekin = 0.5*(SQR(cons(IM1,k,j,i)) + SQR(cons(IM2,k,j,i))
                                  + SQR(cons(IM3,k,j,i)))/cons(IDN,k,j,i);
@@ -395,8 +507,6 @@ void DiskSourceTerms(MeshBlock *pmb, const Real time, const Real dt,
           de = std::max(-de_lim, std::min(de_lim, de));
           cons(IEN,k,j,i) += de;
 
-          const Real yedot = (rho < qw_rho_min && qdot_erg <= 0.0) ? 0.0
-              : yedot_scale*YeSource(temp_mev, ye, ypfree, ynfree, x, rho, le);
           const Real dYe = dt*yedot;
           const Real ye_new = std::max(ye_floor, std::min(ye_ceil, ye + dYe));
           cons_scalar(ye_index,k,j,i) += rho*(ye_new - ye);
@@ -404,6 +514,32 @@ void DiskSourceTerms(MeshBlock *pmb, const Real time, const Real dt,
         if (ye_source_enabled) {
           const Real dye = (ye_eq - ye)*(1.0 - std::exp(-dt/ye_tau));
           cons_scalar(ye_index,k,j,i) += cons(IDN,k,j,i)*dye;
+        }
+        if (repair_ye_density_floor) {
+          Real &rho_cons = cons(IDN,k,j,i);
+          const Real density_floor = pmb->peos->GetDensityFloor();
+          if (rho_cons <= density_floor) {
+            Real ye_cons = ye_init;
+            if (rho_cons > 0.0) {
+              const Real candidate = cons_scalar(ye_index,k,j,i)/rho_cons;
+              if (std::isfinite(candidate)) ye_cons = std::max(ye_init, candidate);
+            }
+            ye_cons = std::max(ye_floor, std::min(ye_ceil, ye_cons));
+            rho_cons = density_floor;
+            cons_scalar(ye_index,k,j,i) = density_floor*ye_cons;
+          }
+        }
+        if (clamp_ye_conserved) {
+          const Real rho_cons = cons(IDN,k,j,i);
+          if (rho_cons > 0.0 && std::isfinite(rho_cons)) {
+            Real &rho_ye = cons_scalar(ye_index,k,j,i);
+            if (!std::isfinite(rho_ye)) {
+              rho_ye = rho_cons*ye_init;
+            } else {
+              rho_ye = std::max(rho_cons*ye_floor,
+                                std::min(rho_cons*ye_ceil, rho_ye));
+            }
+          }
         }
       }
     }
@@ -622,6 +758,68 @@ void DiskOuterX1Diode(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
         for (int n=0; n<NSCALARS; ++n) {
           pmb->pscalars->r(n,k,j,iu+i) = pmb->pscalars->r(n,k,j,iu-i+1);
         }
+      }
+    }
+  }
+}
+
+// Fixed thermodynamic radial boundaries: restore the analytic initial density,
+// pressure, and composition in ghost cells, while applying zero-gradient velocity.
+void DiskInnerX1Fixed(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                      FaceField &b, Real time, Real dt,
+                      int il, int iu, int jl, int ju, int kl, int ku, int ngh) {
+  for (int k=kl; k<=ku; ++k) {
+    for (int j=jl; j<=ju; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        const int ig = il-i;
+        const Real r = pco->x1v(ig);
+        const Real theta = pco->x2v(j);
+        const Real r_cyl = std::max(CylRadius(r, theta), r_in);
+        const bool is_atmosphere = IsAtmosphere(r, theta);
+        const Real rho = DiskDensity(r, theta);
+        Real r_cell[NSCALARS];
+        for (int n=0; n<NSCALARS; ++n) r_cell[n] = 0.0;
+        r_cell[ye_index] = is_atmosphere ? ye_vacuum : ye_init;
+        const Real pres = (is_atmosphere && t_vacuum > 0.0)
+            ? pmb->peos->PresFromRhoT(rho, t_vacuum, r_cell)
+            : rho*PoverRhoAtR(r_cyl);
+
+        prim(IDN,k,j,ig) = rho;
+        prim(IPR,k,j,ig) = pres;
+        prim(IVX,k,j,ig) = prim(IVX,k,j,il);
+        prim(IVY,k,j,ig) = prim(IVY,k,j,il);
+        prim(IVZ,k,j,ig) = prim(IVZ,k,j,il);
+        for (int n=0; n<NSCALARS; ++n) pmb->pscalars->r(n,k,j,ig) = r_cell[n];
+      }
+    }
+  }
+}
+
+void DiskOuterX1Fixed(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                      FaceField &b, Real time, Real dt,
+                      int il, int iu, int jl, int ju, int kl, int ku, int ngh) {
+  for (int k=kl; k<=ku; ++k) {
+    for (int j=jl; j<=ju; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        const int ig = iu+i;
+        const Real r = pco->x1v(ig);
+        const Real theta = pco->x2v(j);
+        const Real r_cyl = std::max(CylRadius(r, theta), r_in);
+        const bool is_atmosphere = IsAtmosphere(r, theta);
+        const Real rho = DiskDensity(r, theta);
+        Real r_cell[NSCALARS];
+        for (int n=0; n<NSCALARS; ++n) r_cell[n] = 0.0;
+        r_cell[ye_index] = is_atmosphere ? ye_vacuum : ye_init;
+        const Real pres = (is_atmosphere && t_vacuum > 0.0)
+            ? pmb->peos->PresFromRhoT(rho, t_vacuum, r_cell)
+            : rho*PoverRhoAtR(r_cyl);
+
+        prim(IDN,k,j,ig) = rho;
+        prim(IPR,k,j,ig) = pres;
+        prim(IVX,k,j,ig) = prim(IVX,k,j,iu);
+        prim(IVY,k,j,ig) = prim(IVY,k,j,iu);
+        prim(IVZ,k,j,ig) = prim(IVZ,k,j,iu);
+        for (int n=0; n<NSCALARS; ++n) pmb->pscalars->r(n,k,j,ig) = r_cell[n];
       }
     }
   }
