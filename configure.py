@@ -180,7 +180,7 @@ parser.add_argument('-omp',
 # --grav=[name] argument
 parser.add_argument('--grav',
                     default='none',
-                    choices=['none', 'fft'],
+                    choices=['none', 'fft', 'mg', 'sph'],
                     help='select self-gravity solver')
 
 # -fft argument
@@ -706,6 +706,23 @@ else:
         if not args['fft']:
             raise SystemExit(
                 '### CONFIGURE ERROR: FFT Poisson solver only be used with FFT')
+    elif args['grav'] == "mg":
+        definitions['SELF_GRAVITY_ENABLED'] = '2'
+    elif args['grav'] == "sph":
+        definitions['SELF_GRAVITY_ENABLED'] = '3'
+        if not args['fft']:
+            raise SystemExit(
+                '### CONFIGURE ERROR: spherical harmonics Poisson solver requires FFT')
+        if not args['mpi']:
+            raise SystemExit(
+                '### CONFIGURE ERROR: spherical harmonics Poisson solver requires MPI')
+        if args['omp']:
+            raise SystemExit(
+                '### CONFIGURE ERROR: spherical harmonics Poisson solver does not '
+                'support OpenMP; use one MPI rank per MeshBlock')
+        # Current Eigen releases require C++14. This later flag intentionally overrides
+        # Athena++'s older compiler-profile default of -std=c++11.
+        makefile_options['COMPILER_FLAGS'] += ' -std=c++14'
 
 # -fft argument
 makefile_options['MPIFFT_FILE'] = ' '
@@ -809,6 +826,10 @@ with open(makefile_output, 'w') as current_file:
 self_grav_string = 'OFF'
 if args['grav'] == 'fft':
     self_grav_string = 'FFT'
+elif args['grav'] == 'mg':
+    self_grav_string = 'Multigrid'
+elif args['grav'] == 'sph':
+    self_grav_string = 'spherical harmonics'
 
 print('Your Athena++ distribution has now been configured with the following options:')
 print('  Problem generator:          ' + args['prob'])

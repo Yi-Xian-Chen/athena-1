@@ -42,6 +42,7 @@ namespace {
 
 constexpr Real c_cgs = 2.99792458e10;
 constexpr Real msun_cgs = 1.98847e33;
+constexpr Real grav_cgs = 6.67430e-8;
 constexpr Real sqrt_two_pi = 2.5066282746310005024;
 
 Real gm_cgs, rg_cgs;
@@ -166,9 +167,15 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 #endif
 
   const Real m_msun = pin->GetOrAddReal("problem", "M_central_msun", 3.0);
-  const Real gm_default = 6.67430e-8*m_msun*msun_cgs;
+  const Real gm_default = grav_cgs*m_msun*msun_cgs;
   gm_cgs = pin->GetOrAddReal("problem", "GM", gm_default);
   rg_cgs = gm_cgs/SQR(c_cgs);
+#if SELF_GRAVITY_ENABLED == 3
+  // The Poisson solver needs G itself. The existing <problem>/GM point-mass
+  // source remains the central compact-object potential; do not also set
+  // <gravity>/M_star, or the central mass would be counted twice.
+  SetFourPiG(4.0*PI*grav_cgs);
+#endif
 
   const Real r_in_rg = pin->GetOrAddReal("problem", "r_in_rg", 50.0);
   const Real r_out_rg = pin->GetOrAddReal("problem", "r_out_rg", 150.0);
@@ -184,7 +191,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   poverrho_slope = pin->GetOrAddReal("problem", "pressure_over_rho_slope", 0.0);
   sigma_slope = pin->GetOrAddReal("problem", "Sigma_slope", -1.5);
   sigma_ref = pin->GetOrAddReal("problem", "Sigma_ref",
-                                std::sqrt(poverrho_ref)*OmegaK(r_ref)/(PI*6.67430e-8*q_ref));
+                                std::sqrt(poverrho_ref)*OmegaK(r_ref)/(PI*grav_cgs*q_ref));
 
   ye_index = pin->GetOrAddInteger("hydro", "helm_ye_index", 0);
   ye_init = pin->GetOrAddReal("problem", "Ye0", 0.4);

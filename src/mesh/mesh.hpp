@@ -51,6 +51,8 @@ class MGGravityDriver;
 class EquationOfState;
 class FFTDriver;
 class FFTGravityDriver;
+class RemapColumns;
+class SphGravityDriver;
 class TurbulenceDriver;
 class OrbitalAdvection;
 
@@ -194,6 +196,8 @@ class Mesh {
   friend class Hydro;
   friend class FFTDriver;
   friend class FFTGravityDriver;
+  friend class RemapColumns;
+  friend class SphGravityDriver;
   friend class TurbulenceDriver;
   friend class MultigridDriver;
   friend class MGGravityDriver;
@@ -244,6 +248,7 @@ class Mesh {
   TurbulenceDriver *ptrbd;
   FFTGravityDriver *pfgrd;
   MGGravityDriver *pmgrd;
+  SphGravityDriver *psgrd;
 
   AthenaArray<Real> *ruser_mesh_data;
   AthenaArray<int> *iuser_mesh_data;

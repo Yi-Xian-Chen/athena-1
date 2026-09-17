@@ -1,0 +1,85 @@
+<comment>
+problem   = Minimal one-rank v4 spherical-self-gravity integration test.
+configure = --prob=gi_disk_3d_eos_v4 --coord=spherical_polar --eos=general/helmholtz --nscalars=1 --nghost=2 --grav=sph -mpi -fft --include=/path/to/eigen3
+
+<job>
+problem_id = gi_disk_v4_minimal_8cube_cycle0
+
+<output1>
+file_type = hst
+dt = 1.0e-3
+
+<time>
+cfl_number = 0.3
+nlim       = 0
+tlim       = 1.0e-6
+integrator = vl2
+xorder     = 2
+ncycle_out = 1
+
+<mesh>
+nx1    = 8
+x1min  = 59066787.64133758
+x1max  = 236267150.56535032
+x1rat  = 1.189207115002721
+ix1_bc = outflow
+ox1_bc = outflow
+
+nx2      = 8
+x2min    = 0.0
+x2max    = 3.141592653589793
+x2rat    = -1.0
+nth_hi   = 2
+nth_lo   = 2
+h_hi     = 0.40
+dth_pole = 0.70
+ix2_bc   = polar
+ox2_bc   = polar
+
+nx3    = 8
+x3min  = 0.0
+x3max  = 6.283185307179586
+x3rat  = 1.0
+ix3_bc = periodic
+ox3_bc = periodic
+
+num_threads = 1
+
+<meshblock>
+# One block and therefore exactly one MPI rank.
+nx1 = 8
+nx2 = 8
+nx3 = 8
+
+<hydro>
+dfloor               = 2.0e7
+pfloor               = 1.0e23
+efloor               = 5.0e23
+eos_file_name        = /Users/yixiancyhen/athena-1/data/eos/helm_table.dat
+eos_file_type        = helm
+helm_assume_defaults = true
+helm_ye_index        = 0
+
+<gravity>
+one_solve_per_cycle = false
+# M_star intentionally remains zero; <problem>/GM supplies the central point mass.
+
+<problem>
+GM                       = 1.3271645321000002e27
+r_in_rg                  = 50.0
+r_out_rg                 = 151.0
+r_ref_rg                 = 100.0
+Q_ref                    = 2.0
+pressure_over_rho_ref    = 8.987551787368176e16
+pressure_over_rho_slope  = -1.0
+Sigma_slope              = -2.0
+Ye0                      = 0.1
+rho_floor                = 2.0e7
+pressure_corrected_rotation = true
+enable_qw_source         = false
+repair_ye_density_floor  = true
+clamp_ye_conserved       = false
+qw_rho_min               = 2.0e7
+qw_energy_fraction_limit = 0.1
+ye_floor                 = 1.0e-6
+ye_ceil                  = 0.999999
