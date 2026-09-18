@@ -1,0 +1,112 @@
+<comment>
+problem   = V3.6 Model 1 full-polar mask, doubled active resolution with midplane-focused theta mesh.
+configure = --prob=gi_disk_3d_eos_v36 --coord=spherical_polar --eos=general/helmholtz --nscalars=1 --nghost=2
+
+<job>
+problem_id = gi_disk_v36_model1_fullpolar_mask_32x96x32_1omega
+
+<output1>
+file_type = hst
+dt = 1.0e-3
+
+<output2>
+file_type = rst
+dt = 4.925639893961039e-2
+
+<output3>
+file_type = tab
+variable = prim
+dt = 4.925639893961039e-2
+dcycle = -1
+x3_slice = 0.29452431127404322
+data_format = %.16e
+
+<output4>
+file_type = tab
+variable = user_out_var
+dt = 4.925639893961039e-2
+dcycle = -1
+x3_slice = 0.29452431127404322
+data_format = %.16e
+
+<time>
+cfl_number = 0.3
+nlim       = -1
+tlim       = 4.925639893961039e-2
+integrator = vl2
+xorder     = 2
+ncycle_out = 10
+
+<mesh>
+# Constant Delta-r/r: 4^(1/32).
+x1rat  = 1.0442737824274138
+nx1    = 32
+x1min  = 59066787.64133758
+x1max  = 236267150.56535032
+ix1_bc = outflow
+ox1_bc = outflow
+
+x2rat    = -1.0
+nx2      = 96
+x2min    = 0.0
+x2max    = 3.141592653589793
+# Per hemisphere: seven fine cells cover |theta-pi/2| <= 0.20
+# (|z/R| <= tan(0.20) = 0.203), followed by a smooth exponential
+# transition whose neighboring cell widths grow by less than 1%.
+# The final 16 cells lie in the masked polar reservoir. The midplane
+# dtheta=0.02857 is comparable to Delta-r/r=0.04332, rather than over-refined.
+nth_hi   = 7
+nth_lo   = 41
+h_hi     = 0.20
+dth_pole = 0.035674770424681035
+ix2_bc   = polar
+ox2_bc   = polar
+
+x3rat  = 1.0
+nx3    = 32
+x3min  = 0.0
+x3max  = 6.283185307179586
+ix3_bc = periodic
+ox3_bc = periodic
+
+num_threads = 1
+
+<meshblock>
+nx1 = 16
+nx2 = 16
+nx3 = 16
+
+<hydro>
+dfloor               = 2.0e7
+pfloor               = 1.0e23
+efloor               = 5.0e23
+eos_file_name        = data/eos/helm_table.dat
+eos_file_type        = helm
+helm_assume_defaults = true
+helm_ye_index        = 0
+
+<problem>
+GM                       = 1.3271645321000002e27
+r_in_rg                  = 50.0
+r_out_rg                 = 151.0
+r_ref_rg                 = 100.0
+Q_ref                    = 2.0
+pressure_over_rho_ref    = 8.987551787368176e16
+pressure_over_rho_slope  = -1.0
+Sigma_slope              = -2.0
+Ye0                      = 0.1
+rho_floor                = 2.0e7
+pressure_corrected_rotation = true
+enable_qw_source         = true
+repair_ye_density_floor  = true
+clamp_ye_conserved       = false
+qw_rho_min               = 2.0e7
+qw_energy_fraction_limit = 0.1
+ye_floor                 = 1.0e-6
+ye_ceil                  = 0.999999
+
+# The face at theta=pi/2-1 remains exact. Thus there are 64 active theta
+# cells total and 32 masked polar cells. Omitting theta_cut still restores
+# strict v3.5 behavior.
+theta_cut                 = 0.5707963267948966
+theta_mask_bc             = outflow

@@ -18,6 +18,10 @@
 #define GI_DISK_ENABLE_MESHGEN false
 #endif
 
+#ifndef GI_DISK_ENABLE_THETA_MASK
+#define GI_DISK_ENABLE_THETA_MASK false
+#endif
+
 // C++ headers
 #include <algorithm>
 #include <cmath>
@@ -53,11 +57,13 @@ Real q_ref;
 Real ye_init, ye_vacuum, t_vacuum;
 Real rho_floor;
 Real vr_init;
+Real theta_cut;
+int theta_mask_bc;
 int ye_index;
 bool ye_source_enabled;
 Real ye_eq, ye_tau;
 bool enable_qw_source, pressure_corrected_rotation, repair_ye_density_floor;
-bool clamp_ye_conserved;
+bool clamp_ye_conserved, rotate_atmosphere;
 std::string user_bc;
 Real source_radius, source_radius_inv2;
 Real l_nu, l_nubar, l_mu, eps_nu, eps_nubar, eps_mu;
@@ -79,6 +85,8 @@ Real DiskDensity(Real r, Real theta);
 bool IsAtmosphere(Real r, Real theta);
 Real VphiSquared(Real r, Real theta);
 void FillCellState(MeshBlock *pmb, int k, int j, int i);
+void FillMaskedState(MeshBlock *pmb, int k, int j, int i,
+                     AthenaArray<Real> &cons, AthenaArray<Real> &cons_scalar);
 Real FermiApprox(int n, Real eta);
 void LuminosityData(AthenaArray<Real> &out);
 Real QWEta(Real rho, Real temp, Real ye);
@@ -199,6 +207,31 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   rho_floor = pin->GetOrAddReal("problem", "rho_floor", 1.0e6);
   t_vacuum = pin->GetOrAddReal("problem", "T_vacuum", -1.0);
   vr_init = pin->GetOrAddReal("problem", "vr", 0.0);
+#if GI_DISK_ENABLE_THETA_MASK
+  // Omitted or nonpositive theta_cut is the strict legacy fallback.
+  theta_cut = pin->GetOrAddReal("problem", "theta_cut", -1.0);
+  const std::string theta_mask_bc_name =
+      pin->GetOrAddString("problem", "theta_mask_bc", "reflecting");
+  if (theta_mask_bc_name == "reflecting") {
+    theta_mask_bc = 0;
+  } else if (theta_mask_bc_name == "outflow") {
+    theta_mask_bc = 1;
+  } else {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
+        << "theta_mask_bc must be 'reflecting' or 'outflow'.";
+    ATHENA_ERROR(msg);
+  }
+  if (theta_cut >= 0.5*PI) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
+        << "theta_cut must be omitted, nonpositive, or less than pi/2.";
+    ATHENA_ERROR(msg);
+  }
+#else
+  theta_cut = -1.0;
+  theta_mask_bc = 0;
+#endif
 
   ye_source_enabled = pin->GetOrAddBoolean("problem", "ye_source_enabled", false);
   ye_eq = pin->GetOrAddReal("problem", "ye_eq", ye_init);
@@ -206,6 +239,10 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   pressure_corrected_rotation =
       pin->GetOrAddBoolean("problem", "pressure_corrected_rotation",
                            GI_DISK_PRESSURE_CORRECTED_DEFAULT);
+  // Legacy runs rotate even floor-density atmosphere cells. On a full-polar
+  // domain that extends the v_phi ~ sqrt(GM/R) prescription close to R=0.
+  // Keep the old behavior by default while permitting a controlled test.
+  rotate_atmosphere = pin->GetOrAddBoolean("problem", "rotate_atmosphere", true);
   enable_qw_source = pin->GetOrAddBoolean("problem", "enable_qw_source", false);
   repair_ye_density_floor =
       pin->GetOrAddBoolean("problem", "repair_ye_density_floor", false);
@@ -248,7 +285,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   }
 
   if (ye_source_enabled || enable_qw_source || repair_ye_density_floor
-      || clamp_ye_conserved) {
+      || clamp_ye_conserved || theta_cut > 0.0) {
     EnrollUserExplicitSourceFunction(DiskSourceTerms);
   }
   if (mesh_bcs[BoundaryFace::inner_x1] == GetBoundaryFlag("user")) {
@@ -302,6 +339,31 @@ Real DiskThetaMeshGen(Real x, RegionSize rs) {
 #endif
 
 void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
+#if GI_DISK_ENABLE_THETA_MASK
+  hydro_theta_mask_enabled = theta_cut > 0.0;
+  hydro_theta_cut = hydro_theta_mask_enabled ? theta_cut : 0.0;
+  hydro_theta_mask_bc = hydro_theta_mask_enabled ? theta_mask_bc : 0;
+  if (hydro_theta_mask_enabled) {
+    const Real tol = 1.0e-10;
+    const Real targets[2] = {theta_cut, PI - theta_cut};
+    for (int n=0; n<2; ++n) {
+      const Real target = targets[n];
+      bool on_face = false;
+      for (int jf=js; jf<=je+1; ++jf) {
+        if (std::abs(pcoord->x2f(jf) - target) < tol) on_face = true;
+      }
+      if (target > pcoord->x2f(js) + tol && target < pcoord->x2f(je+1) - tol
+          && !on_face) {
+        std::stringstream msg;
+        msg << "### FATAL ERROR in " << GI_DISK_PGEN_NAME << std::endl
+            << "theta_cut=" << theta_cut
+            << " must coincide with theta cell faces; offending MeshBlock spans ["
+            << pcoord->x2f(js) << ", " << pcoord->x2f(je+1) << "].";
+        ATHENA_ERROR(msg);
+      }
+    }
+  }
+#endif
   AllocateUserOutputVariables(8);
   SetUserOutputVariableName(0, "temp");
   SetUserOutputVariableName(1, "xalpha");
@@ -324,7 +386,11 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   for (int k=kl; k<=ku; ++k) {
     for (int j=jl; j<=ju; ++j) {
       for (int i=il; i<=iu; ++i) {
-        FillCellState(this, k, j, i);
+        if (IsHydroThetaMasked(j)) {
+          FillMaskedState(this, k, j, i, phydro->u, pscalars->s);
+        } else {
+          FillCellState(this, k, j, i);
+        }
       }
     }
   }
@@ -441,7 +507,8 @@ void FillCellState(MeshBlock *pmb, int k, int j, int i) {
   const bool is_atmosphere = IsAtmosphere(r, theta);
   const Real rho = DiskDensity(r, theta);
   const Real poverrho = PoverRhoAtR(r_cyl);
-  const Real vphi2 = std::max(VphiSquared(r, theta), 0.0);
+  const Real vphi2 = (is_atmosphere && !rotate_atmosphere)
+      ? 0.0 : std::max(VphiSquared(r, theta), 0.0);
   const Real vphi = std::sqrt(vphi2);
 
   Real r_cell[NSCALARS];
@@ -471,6 +538,32 @@ void FillCellState(MeshBlock *pmb, int k, int j, int i) {
   }
 }
 
+void FillMaskedState(MeshBlock *pmb, int k, int j, int i,
+                     AthenaArray<Real> &cons, AthenaArray<Real> &cons_scalar) {
+  const Real rho = rho_floor;
+  const Real pres = rho*PoverRhoAtR(r_in);
+  Real r_cell[NSCALARS];
+  for (int n=0; n<NSCALARS; ++n) r_cell[n] = 0.0;
+  r_cell[ye_index] = ye_vacuum;
+  const Real egas = pmb->peos->EgasFromRhoP(rho, pres, r_cell);
+
+  cons(IDN,k,j,i) = rho;
+  cons(IM1,k,j,i) = 0.0;
+  cons(IM2,k,j,i) = 0.0;
+  cons(IM3,k,j,i) = 0.0;
+  cons(IEN,k,j,i) = egas;
+  for (int n=0; n<NSCALARS; ++n) cons_scalar(n,k,j,i) = rho*r_cell[n];
+
+  // Keep the primitive register valid for initialization and for flux work that
+  // precedes the next conserved-to-primitive conversion.
+  pmb->phydro->w(IDN,k,j,i) = rho;
+  pmb->phydro->w(IVX,k,j,i) = 0.0;
+  pmb->phydro->w(IVY,k,j,i) = 0.0;
+  pmb->phydro->w(IVZ,k,j,i) = 0.0;
+  pmb->phydro->w(IPR,k,j,i) = pres;
+  for (int n=0; n<NSCALARS; ++n) pmb->pscalars->r(n,k,j,i) = r_cell[n];
+}
+
 void DiskSourceTerms(MeshBlock *pmb, const Real time, const Real dt,
                      const AthenaArray<Real> &prim,
                      const AthenaArray<Real> &prim_scalar,
@@ -485,6 +578,10 @@ void DiskSourceTerms(MeshBlock *pmb, const Real time, const Real dt,
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
       for (int i=pmb->is; i<=pmb->ie; ++i) {
+        if (pmb->IsHydroThetaMasked(j)) {
+          FillMaskedState(pmb, k, j, i, cons, cons_scalar);
+          continue;
+        }
         const Real rho = prim(IDN,k,j,i);
         const Real ye = std::max(1.0e-12, std::min(1.0 - 1.0e-12,
                                                    prim_scalar(ye_index,k,j,i)));

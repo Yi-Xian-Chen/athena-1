@@ -270,7 +270,11 @@ void SphGravity::LoadSource(Real * src) {
       for (int i=pmb->is;i<=pmb->ie;i++) {
         int ind = (k-pmb->ks)*pmb->block_size.nx2*pmb->block_size.nx1
                 + (j-pmb->js)*pmb->block_size.nx1 + (i-pmb->is);
-        src[ind] = pmb->phydro->u(IDN,k,j,i) * four_pi_G * SQR(pmb->pcoord->x1v(i)) / N[2];
+        // Inactive hydro cones represent vacuum for the Poisson solve. With no
+        // pgen-enabled mask this is exactly the legacy source expression.
+        const Real rho_source = pmb->IsHydroThetaMasked(j)
+            ? 0.0 : pmb->phydro->u(IDN,k,j,i);
+        src[ind] = rho_source * four_pi_G * SQR(pmb->pcoord->x1v(i)) / N[2];
       }
     }
   }

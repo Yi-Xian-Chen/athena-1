@@ -1986,6 +1986,9 @@ TaskStatus TimeIntegratorTaskList::Primitives(MeshBlock *pmb, int stage) {
   if (pbval->nblevel[2][1][1] != -1) ku += NGHOST;
 
   if (stage <= nstages) {
+    // Internal theta masks emulate physical ghost zones. Refresh their
+    // conserved stencil before any EOS inversion; disabled masks are a no-op.
+    ph->PrepareThetaMaskConserved(ph->u, (NSCALARS) ? ps->s : empty);
     // At beginning of this task, ph->w contains previous stage's W(U) output
     // and ph->w1 is used as a register to store the current stage's output.
     // For the second order integrators VL2 and RK2, the prim_old initial guess for the

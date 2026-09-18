@@ -1,51 +1,63 @@
 <comment>
-problem   = V4 Model 1 nonuniform full-polar mesh with spherical self-gravity.
-configure = --prob=gi_disk_3d_eos_v4 --coord=spherical_polar --eos=general/helmholtz --nscalars=1 --nghost=2 --grav=sph -mpi -fft -hdf5 --include=/path/to/eigen3
+problem   = V4 direct extension of the successful V3.6 masked-polar run.
+configure = --prob=gi_disk_3d_eos_v4 --coord=spherical_polar --eos=general/helmholtz --nscalars=1 --nghost=2 --grav=sph -mpi -fft --include=/path/to/eigen3
 
 <job>
-problem_id = gi_disk_v4_model1_meshgen_64x64x256_cycle0
+problem_id = gi_disk_v4_model1_fullpolar_mask_32x96x32_1omega_4rank
 
 <output1>
 file_type = hst
 dt = 1.0e-3
 
 <output2>
-# One volume dump per Omega^-1. "prim" includes rho, pressure, velocity,
-# self-gravity potential, and Ye (r0); user_out_var adds EOS/source diagnostics.
-file_type = hdf5
-variable  = prim,user_out_var
-dt        = 4.925639893961039e-2
-dcycle    = -1
+file_type = rst
+dt = 4.925639893961039e-2
+
+<output3>
+file_type = tab
+variable = prim
+dt = 4.925639893961039e-2
+dcycle = -1
+x3_slice = 0.29452431127404322
+data_format = %.16e
+
+<output4>
+file_type = tab
+variable = user_out_var
+dt = 4.925639893961039e-2
+dcycle = -1
+x3_slice = 0.29452431127404322
+data_format = %.16e
 
 <time>
 cfl_number = 0.3
-nlim       = 0
-tlim       = 1.477691968188312e-1
+nlim       = -1
+tlim       = 4.925639893961039e-2
 integrator = vl2
 xorder     = 2
 ncycle_out = 10
 
 <mesh>
-x1rat  = 1.0218971486541166
-nx1    = 64
+x1rat  = 1.0442737824274138
+nx1    = 32
 x1min  = 59066787.64133758
 x1max  = 236267150.56535032
 ix1_bc = outflow
 ox1_bc = outflow
 
 x2rat    = -1.0
-nx2      = 64
+nx2      = 96
 x2min    = 0.0
 x2max    = 3.141592653589793
-nth_hi   = 18
-nth_lo   = 14
-h_hi     = 0.40
-dth_pole = 0.20
+nth_hi   = 7
+nth_lo   = 41
+h_hi     = 0.20
+dth_pole = 0.035674770424681035
 ix2_bc   = polar
 ox2_bc   = polar
 
 x3rat  = 1.0
-nx3    = 256
+nx3    = 32
 x3min  = 0.0
 x3max  = 6.283185307179586
 ix3_bc = periodic
@@ -54,10 +66,9 @@ ox3_bc = periodic
 num_threads = 1
 
 <meshblock>
-# Each block spans the full theta domain. The 4x1x16 decomposition requires
-# exactly 64 MPI ranks and avoids internal theta block boundaries.
+# 2 x 1 x 2 = 4 blocks/ranks. Each block spans the complete theta domain.
 nx1 = 16
-nx2 = 64
+nx2 = 96
 nx3 = 16
 
 <hydro>
@@ -70,7 +81,6 @@ helm_assume_defaults = true
 helm_ye_index        = 0
 
 <gravity>
-# The central compact object remains in <problem>/GM; leave M_star unset here.
 one_solve_per_cycle = false
 
 <problem>
@@ -92,3 +102,6 @@ qw_rho_min               = 2.0e7
 qw_energy_fraction_limit = 0.1
 ye_floor                 = 1.0e-6
 ye_ceil                  = 0.999999
+
+theta_cut                 = 0.5707963267948966
+theta_mask_bc             = outflow

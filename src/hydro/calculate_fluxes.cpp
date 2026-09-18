@@ -40,6 +40,9 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
                             AthenaArray<Real> &bcc, AthenaArray<Real> &r,
                             const int order) {
   MeshBlock *pmb = pmy_block;
+  // Supply reflecting ghost states on the active side of an opt-in internal
+  // cone wall before reconstruction or EOS wave-speed calls occur.
+  PrepareThetaMaskReconstruction(w, r);
   int is = pmb->is; int js = pmb->js; int ks = pmb->ks;
   int ie = pmb->ie; int je = pmb->je; int ke = pmb->ke;
   int il, iu, jl, ju, kl, ku;
@@ -470,7 +473,128 @@ void Hydro::CalculateFluxes(AthenaArray<Real> &w, FaceField &b,
     if (NSCALARS) ps->AddDiffusionFluxes();
   }
 
+  // Optional internal slip walls bounding inactive polar cones. This is a no-op
+  // for every problem that does not explicitly enable the MeshBlock mask.
+  ApplyThetaMaskFluxBoundary(w);
+
   return;
+}
+
+void Hydro::PrepareThetaMaskReconstruction(AthenaArray<Real> &w,
+                                           AthenaArray<Real> &r) {
+  MeshBlock *pmb = pmy_block;
+  if (!pmb->hydro_theta_mask_enabled) return;
+
+  const int js = pmb->js, je = pmb->je;
+  for (int jf=js; jf<=je+1; ++jf) {
+    const bool left_masked = pmb->IsHydroThetaMasked(jf-1);
+    const bool right_masked = pmb->IsHydroThetaMasked(jf);
+    if (left_masked == right_masked) continue;
+    const int ng = (pmb->hydro_theta_mask_bc == 1) ? pmb->ncells2 : NGHOST;
+    for (int g=1; g<=ng; ++g) {
+      const int dst = left_masked ? jf-g : jf+g-1;
+      const int src = (pmb->hydro_theta_mask_bc == 1)
+          ? (left_masked ? jf : jf-1)
+          : (left_masked ? jf+g-1 : jf-g);
+      if (dst < 0 || dst >= pmb->ncells2 || src < 0 || src >= pmb->ncells2) continue;
+      for (int k=0; k<pmb->ncells3; ++k) {
+        for (int i=0; i<pmb->ncells1; ++i) {
+          for (int n=0; n<NHYDRO; ++n) w(n,k,dst,i) = w(n,k,src,i);
+          if (pmb->hydro_theta_mask_bc == 0) {
+            w(IVY,k,dst,i) = -w(IVY,k,src,i);
+          }
+          for (int n=0; n<NSCALARS; ++n) r(n,k,dst,i) = r(n,k,src,i);
+        }
+      }
+    }
+  }
+}
+
+void Hydro::PrepareThetaMaskConserved(AthenaArray<Real> &u,
+                                      AthenaArray<Real> &s) {
+  MeshBlock *pmb = pmy_block;
+  if (!pmb->hydro_theta_mask_enabled) return;
+
+  const int js = pmb->js, je = pmb->je;
+  for (int jf=js; jf<=je+1; ++jf) {
+    const bool left_masked = pmb->IsHydroThetaMasked(jf-1);
+    const bool right_masked = pmb->IsHydroThetaMasked(jf);
+    if (left_masked == right_masked) continue;
+    const int ng = (pmb->hydro_theta_mask_bc == 1) ? pmb->ncells2 : NGHOST;
+    for (int g=1; g<=ng; ++g) {
+      const int dst = left_masked ? jf-g : jf+g-1;
+      const int src = (pmb->hydro_theta_mask_bc == 1)
+          ? (left_masked ? jf : jf-1)
+          : (left_masked ? jf+g-1 : jf-g);
+      if (dst < 0 || dst >= pmb->ncells2 || src < 0 || src >= pmb->ncells2) continue;
+      for (int k=0; k<pmb->ncells3; ++k) {
+        for (int i=0; i<pmb->ncells1; ++i) {
+          for (int n=0; n<NHYDRO; ++n) u(n,k,dst,i) = u(n,k,src,i);
+          if (pmb->hydro_theta_mask_bc == 0) {
+            u(IM2,k,dst,i) = -u(IM2,k,src,i);
+          }
+          for (int n=0; n<NSCALARS; ++n) s(n,k,dst,i) = s(n,k,src,i);
+        }
+      }
+    }
+  }
+}
+
+void Hydro::ApplyThetaMaskFluxBoundary(AthenaArray<Real> &w) {
+  MeshBlock *pmb = pmy_block;
+  if (!pmb->hydro_theta_mask_enabled) return;
+
+  PassiveScalars *ps = pmb->pscalars;
+  const int is = pmb->is, ie = pmb->ie;
+  const int js = pmb->js, je = pmb->je;
+  const int ks = pmb->ks, ke = pmb->ke;
+
+  // Masked rows are inert in r and phi.
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      if (!pmb->IsHydroThetaMasked(j)) continue;
+      for (int n=0; n<NHYDRO; ++n) {
+        for (int i=is; i<=ie+1; ++i) flux[X1DIR](n,k,j,i) = 0.0;
+      }
+      for (int n=0; n<NSCALARS; ++n) {
+        for (int i=is; i<=ie+1; ++i) ps->s_flux[X1DIR](n,k,j,i) = 0.0;
+      }
+    }
+  }
+  for (int k=ks; k<=ke+1; ++k) {
+    for (int j=js; j<=je; ++j) {
+      if (!pmb->IsHydroThetaMasked(j)) continue;
+      for (int n=0; n<NHYDRO; ++n) {
+        for (int i=is; i<=ie; ++i) flux[X3DIR](n,k,j,i) = 0.0;
+      }
+      for (int n=0; n<NSCALARS; ++n) {
+        for (int i=is; i<=ie; ++i) ps->s_flux[X3DIR](n,k,j,i) = 0.0;
+      }
+    }
+  }
+
+  // Reflecting interfaces retain only the mirrored-state HLLC normal-momentum
+  // flux. Outflow interfaces retain the complete zero-gradient HLLC flux,
+  // matching Athena's ordinary outflow boundary behavior.
+  for (int k=ks; k<=ke; ++k) {
+    for (int jf=js; jf<=je+1; ++jf) {
+      const bool left_masked = pmb->IsHydroThetaMasked(jf-1);
+      const bool right_masked = pmb->IsHydroThetaMasked(jf);
+      if (!(left_masked || right_masked)) continue;
+      for (int i=is; i<=ie; ++i) {
+        if (left_masked != right_masked && pmb->hydro_theta_mask_bc == 1) continue;
+        const Real wall_normal_momentum = flux[X2DIR](IM2,k,jf,i);
+        for (int n=0; n<NHYDRO; ++n) flux[X2DIR](n,k,jf,i) = 0.0;
+        if (left_masked != right_masked) {
+          // Preserve the HLLC normal-momentum flux computed from the mirrored
+          // states; this matches Athena's physical reflecting boundary more
+          // closely than substituting the cell-centered pressure.
+          flux[X2DIR](IM2,k,jf,i) = wall_normal_momentum;
+        }
+        for (int n=0; n<NSCALARS; ++n) ps->s_flux[X2DIR](n,k,jf,i) = 0.0;
+      }
+    }
+  }
 }
 
 //----------------------------------------------------------------------------------------

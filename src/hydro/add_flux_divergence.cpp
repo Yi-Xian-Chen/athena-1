@@ -38,6 +38,10 @@
 // used)
 void Hydro::AddFluxDivergence(const Real wght, AthenaArray<Real> &u_out) {
   MeshBlock *pmb = pmy_block;
+  // Flux-correction communication can overwrite an internal mask-interface
+  // flux after CalculateFluxes(). Reapply the opt-in wall immediately before
+  // both this divergence and the following coordinate-source update consume it.
+  ApplyThetaMaskFluxBoundary(pmb->phydro->w);
   AthenaArray<Real> &x1flux = flux[X1DIR];
   AthenaArray<Real> &x2flux = flux[X2DIR];
   AthenaArray<Real> &x3flux = flux[X3DIR];
@@ -49,6 +53,7 @@ void Hydro::AddFluxDivergence(const Real wght, AthenaArray<Real> &u_out) {
 
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
+      if (pmb->IsHydroThetaMasked(j)) continue;
       // calculate x1-flux divergence
       pmb->pcoord->Face1Area(k, j, is, ie+1, x1area);
       for (int n=0; n<NHYDRO; ++n) {

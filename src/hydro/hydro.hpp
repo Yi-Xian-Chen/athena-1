@@ -71,6 +71,9 @@ class Hydro {
                              std::vector<int> idx_subset);
   void CalculateFluxes(AthenaArray<Real> &w, FaceField &b, AthenaArray<Real> &bcc,
                        AthenaArray<Real> &r, const int order);
+  void PrepareThetaMaskConserved(AthenaArray<Real> &u, AthenaArray<Real> &s);
+  void PrepareThetaMaskReconstruction(AthenaArray<Real> &w, AthenaArray<Real> &r);
+  void ApplyThetaMaskFluxBoundary(AthenaArray<Real> &w);
   void CalculateFluxes_STS();
 #if !MAGNETIC_FIELDS_ENABLED  // Hydro:
   void RiemannSolver(

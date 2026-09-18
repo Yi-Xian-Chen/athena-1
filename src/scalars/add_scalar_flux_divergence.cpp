@@ -52,6 +52,7 @@ void PassiveScalars::AddFluxDivergence(const Real wght, AthenaArray<Real> &s_out
 
   for (int k=ks; k<=ke; ++k) {
     for (int j=js; j<=je; ++j) {
+      if (pmb->IsHydroThetaMasked(j)) continue;
       // calculate x1-flux divergence
       pmb->pcoord->Face1Area(k, j, is, ie+1, x1area);
       for (int n=0; n<NSCALARS; ++n) {

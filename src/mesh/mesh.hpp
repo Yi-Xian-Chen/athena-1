@@ -97,6 +97,14 @@ class MeshBlock {
   int cis, cie, cjs, cje, cks, cke, cnghost;
   int gflag;
 
+  // Optional inactive polar cones. Problem generators must explicitly enable this;
+  // the default leaves every legacy problem and MeshBlock unchanged.
+  bool hydro_theta_mask_enabled;
+  Real hydro_theta_cut;
+  // 0: reflecting slip wall; 1: one-way outflow into the masked cone.
+  int hydro_theta_mask_bc;
+  bool IsHydroThetaMasked(int j) const;
+
   // user output variables for analysis
   int nuser_out_var;
   AthenaArray<Real> user_out_var;
