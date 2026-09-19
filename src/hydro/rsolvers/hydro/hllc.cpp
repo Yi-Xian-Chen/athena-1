@@ -91,6 +91,16 @@ void Hydro::RiemannSolver(const int k, const int j, const int il, const int iu,
     Real rhol = wli[IDN] + (wli[IVX] - umid) * rhoa / ca; // mid-left density
     Real rhor = wri[IDN] + (umid - wri[IVX]) * rhoa / ca; // mid-right density
 
+    // The PVRS estimates are used only to estimate the general-EOS wave speeds.  In a
+    // strong rarefaction they are not positivity preserving even when the reconstructed
+    // interface states themselves have already been floored.  Do not pass an unphysical
+    // intermediate density or pressure to a tabulated EOS.
+    if (GENERAL_EOS) {
+      rhol = std::max(rhol, pmy_block->peos->GetDensityFloor());
+      rhor = std::max(rhor, pmy_block->peos->GetDensityFloor());
+      pmid = std::max(pmid, pmy_block->peos->GetPressureFloor());
+    }
+
     //--- Step 3.  Compute sound speed in L,R
 
     Real ql, qr;

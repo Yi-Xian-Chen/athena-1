@@ -652,7 +652,11 @@ class HelmTable {
         HelmLookupRhoT(rho, BrakT[0], ye, OutData);
         Real low = InversionValue(rho, BrakT[0], ye, index, shifted_energy, OutData);
         // If we've specified Tfloor and we are below Tmin just use Tmin and return
-        if (Tfloor && var < low) {
+        // Treat values within the inversion tolerance of the table minimum as
+        // floor states.  A strict comparison can otherwise attempt to bracket
+        // a root infinitesimally above Tmin and collapse the bracket through
+        // roundoff (most often after a boundary state has already been floored).
+        if (Tfloor && var <= low*(1.0 + prec)) {
           return;
         }
         HelmLookupRhoT(rho, BrakT[1], ye, OutData);
@@ -687,7 +691,7 @@ class HelmTable {
         HelmLookupRhoT(rho, BrakT[0], ye, OutData);
         Real low = InversionValue(rho, BrakT[0], ye, index, shifted_energy, OutData);
         // If we've specified Tfloor and we are below Tmin just use Tmin and return
-        if (Tfloor && var < low) {
+        if (Tfloor && var <= low*(1.0 + prec)) {
           return;
         }
         HelmLookupRhoT(rho, BrakT[1], ye, OutData);
@@ -952,7 +956,8 @@ namespace {
     if (ye < 0.0 || ye > 1.0 || !std::isfinite(ye)) {
       std::stringstream msg;
       msg << "### FATAL ERROR in " << caller << std::endl
-          << "Ye must be supplied as a finite value in [0, 1]." << std::endl;
+          << "Ye must be supplied as a finite value in [0, 1]." << std::endl
+          << "Ye = " << ye << std::endl;
       ATHENA_ERROR(msg);
     }
     return std::max(1.0e-16, std::min(1.0 - 1.0e-16, ye));
