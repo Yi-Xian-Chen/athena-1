@@ -22,6 +22,10 @@
 #define GI_DISK_ENABLE_THETA_MASK false
 #endif
 
+#ifndef GI_DISK_ATMOSPHERE_FROM_HELM_TFLOOR
+#define GI_DISK_ATMOSPHERE_FROM_HELM_TFLOOR false
+#endif
+
 // C++ headers
 #include <algorithm>
 #include <cmath>
@@ -62,7 +66,8 @@ int theta_mask_bc;
 int ye_index;
 bool ye_source_enabled;
 Real ye_eq, ye_tau;
-bool enable_qw_source, pressure_corrected_rotation, repair_ye_density_floor;
+bool enable_qw_source, pressure_corrected_rotation, rotation_include_disk_monopole;
+bool repair_ye_density_floor;
 bool clamp_ye_conserved, rotate_atmosphere;
 std::string user_bc;
 Real source_radius, source_radius_inv2;
@@ -81,6 +86,7 @@ Real PoverRhoAtR(Real r_cyl);
 Real OmegaK(Real r_cyl);
 Real ScaleHeight(Real r_cyl);
 Real RhoMid(Real r_cyl);
+Real EnclosedDiskMass(Real r_cyl);
 Real DiskDensity(Real r, Real theta);
 bool IsAtmosphere(Real r, Real theta);
 Real VphiSquared(Real r, Real theta);
@@ -205,7 +211,16 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   ye_init = pin->GetOrAddReal("problem", "Ye0", 0.4);
   ye_vacuum = pin->GetOrAddReal("problem", "Ye_vacuum", ye_init);
   rho_floor = pin->GetOrAddReal("problem", "rho_floor", 1.0e6);
-  t_vacuum = pin->GetOrAddReal("problem", "T_vacuum", -1.0);
+#if GI_DISK_ATMOSPHERE_FROM_HELM_TFLOOR
+  // V4.1 couples the initialized atmosphere and masked cones to the same
+  // configurable Helmholtz inversion floor.  An explicit problem/T_vacuum
+  // can still override this pgen default without changing the EOS floor.
+  const Real default_t_vacuum =
+      pin->GetOrAddReal("hydro", "helm_Tfloor_temperature", 1.0e3);
+#else
+  const Real default_t_vacuum = -1.0;
+#endif
+  t_vacuum = pin->GetOrAddReal("problem", "T_vacuum", default_t_vacuum);
   vr_init = pin->GetOrAddReal("problem", "vr", 0.0);
 #if GI_DISK_ENABLE_THETA_MASK
   // Omitted or nonpositive theta_cut is the strict legacy fallback.
@@ -239,6 +254,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   pressure_corrected_rotation =
       pin->GetOrAddBoolean("problem", "pressure_corrected_rotation",
                            GI_DISK_PRESSURE_CORRECTED_DEFAULT);
+  rotation_include_disk_monopole =
+      pin->GetOrAddBoolean("problem", "rotation_include_disk_monopole", false);
   // Legacy runs rotate even floor-density atmosphere cells. On a full-polar
   // domain that extends the v_phi ~ sqrt(GM/R) prescription close to R=0.
   // Keep the old behavior by default while permitting a controlled test.
@@ -306,7 +323,10 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
               << " cm, Q_ref=" << q_ref << ", Sigma_ref=" << sigma_ref
               << ", P/rho_ref=" << poverrho_ref << ", Ye0=" << ye_init
               << ", Ye_vacuum=" << ye_vacuum
+              << ", T_vacuum=" << t_vacuum
               << ", pressure_rotation=" << pressure_corrected_rotation
+              << ", disk_monopole_rotation=" << rotation_include_disk_monopole
+              << ", Mdisk(<r_ref)/Msun=" << EnclosedDiskMass(r_ref)/msun_cgs
               << ", user_bc=" << user_bc
               << ", QW=" << enable_qw_source
               << ", repair_Ye_floor=" << repair_ye_density_floor
@@ -376,6 +396,61 @@ void MeshBlock::InitUserMeshBlockData(ParameterInput *pin) {
 }
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  // Optional zero-step reference-state probe used by
+  // scripts/probe_reference_state.py.  Keeping the EOS call here guarantees
+  // that diagnostics use the same compiled Helmholtz implementation as a run.
+  if (Globals::my_rank == 0
+      && pin->GetOrAddBoolean("problem", "eos_reference_probe", false)) {
+    const Real probe_rho = pin->GetReal("problem", "eos_probe_rho");
+    const Real probe_pres = pin->GetReal("problem", "eos_probe_pressure");
+    const Real probe_ye = pin->GetReal("problem", "eos_probe_ye");
+    Real r_cell[NSCALARS];
+    for (int n=0; n<NSCALARS; ++n) r_cell[n] = 0.0;
+    r_cell[ye_index] = probe_ye;
+    const Real probe_temp = peos->TFromRhoP(probe_rho, probe_pres, r_cell);
+    const Real probe_energy = peos->EgasFromRhoT(probe_rho, probe_temp, r_cell);
+    const Real probe_asq = peos->AsqFromRhoP(probe_rho, probe_pres, r_cell);
+    std::cout << "EOS_REFERENCE"
+              << " rho=" << probe_rho
+              << " pressure=" << probe_pres
+              << " ye=" << probe_ye
+              << " temperature=" << probe_temp
+              << " energy_density=" << probe_energy
+              << " cs_over_c=" << std::sqrt(probe_asq)/c_cgs
+              << " xalpha="
+              << peos->XalphaFromRhoTYe(probe_rho, probe_temp, probe_ye)
+              << std::endl;
+  }
+#if GI_DISK_ATMOSPHERE_FROM_HELM_TFLOOR
+  if (Globals::my_rank == 0 && t_vacuum > 0.0) {
+    Real r_cell[NSCALARS];
+    for (int n=0; n<NSCALARS; ++n) r_cell[n] = 0.0;
+    r_cell[ye_index] = ye_vacuum;
+    const Real atmosphere_energy =
+        peos->EgasFromRhoT(rho_floor, t_vacuum, r_cell);
+    const Real atmosphere_pressure =
+        peos->PresFromRhoT(rho_floor, t_vacuum, r_cell);
+    const Real configured_efloor = pin->GetReal("hydro", "efloor");
+    const Real configured_pfloor = pin->GetReal("hydro", "pfloor");
+    if (!pin->GetBoolean("hydro", "helm_Tfloor")) {
+      std::cout << "WARNING in " << GI_DISK_PGEN_NAME
+                << ": atmosphere initialization is tied to T_vacuum="
+                << t_vacuum
+                << " K, but hydro/helm_Tfloor is false; later EOS inversions "
+                << "will not enforce that temperature floor." << std::endl;
+    }
+    if (configured_efloor > atmosphere_energy*(1.0 + 1.0e-12)
+        || configured_pfloor > atmosphere_pressure*(1.0 + 1.0e-12)) {
+      std::cout << "WARNING in " << GI_DISK_PGEN_NAME
+                << ": hydro floors exceed the EOS state at rho_floor and "
+                << "T_vacuum. The evolved atmosphere will be hotter than "
+                << t_vacuum << " K. EOS state: P=" << atmosphere_pressure
+                << ", e=" << atmosphere_energy << "; configured pfloor="
+                << configured_pfloor << ", efloor=" << configured_efloor
+                << "." << std::endl;
+    }
+  }
+#endif
   const int il = is - NGHOST;
   const int iu = ie + NGHOST;
   const int jl = js - NGHOST;
@@ -468,6 +543,18 @@ Real RhoMid(Real r_cyl) {
   return SigmaAtR(r_cyl)/(sqrt_two_pi*ScaleHeight(r_cyl));
 }
 
+Real EnclosedDiskMass(Real r_cyl) {
+  const Real upper = std::min(std::max(r_cyl, r_in), r_out);
+  if (upper <= r_in) return 0.0;
+  const Real x_upper = upper/r_ref;
+  const Real x_inner = r_in/r_ref;
+  const Real exponent = sigma_slope + 2.0;
+  const Real integral = std::abs(exponent) < 1.0e-12
+      ? std::log(x_upper/x_inner)
+      : (std::pow(x_upper, exponent) - std::pow(x_inner, exponent))/exponent;
+  return 2.0*PI*sigma_ref*SQR(r_ref)*integral;
+}
+
 Real DiskDensity(Real r, Real theta) {
   if (r < r_in || r > r_out) return rho_floor;
   const Real r_cyl = CylRadius(r, theta);
@@ -490,14 +577,19 @@ bool IsAtmosphere(Real r, Real theta) {
 Real VphiSquared(Real r, Real theta) {
   const Real r_cyl = CylRadius(r, theta);
   if (r_cyl <= 0.0) return 0.0;
-  if (!pressure_corrected_rotation || r_cyl < r_in || r_cyl > r_out) return gm_cgs/r_cyl;
+  const Real gravity_term =
+      (gm_cgs + (rotation_include_disk_monopole
+                     ? grav_cgs*EnclosedDiskMass(r_cyl) : 0.0))/r_cyl;
+  if (!pressure_corrected_rotation || r_cyl < r_in || r_cyl > r_out) {
+    return gravity_term;
+  }
 
   const Real h = ScaleHeight(r_cyl);
   const Real z = r*std::cos(theta);
   const Real dln_h = 0.5*poverrho_slope + 1.5;
   const Real dln_rho = sigma_slope - dln_h + SQR(z/h)*dln_h;
   const Real pressure_term = PoverRhoAtR(r_cyl)*(dln_rho + poverrho_slope);
-  return gm_cgs/r_cyl + pressure_term;
+  return gravity_term + pressure_term;
 }
 
 void FillCellState(MeshBlock *pmb, int k, int j, int i) {
@@ -541,11 +633,15 @@ void FillCellState(MeshBlock *pmb, int k, int j, int i) {
 void FillMaskedState(MeshBlock *pmb, int k, int j, int i,
                      AthenaArray<Real> &cons, AthenaArray<Real> &cons_scalar) {
   const Real rho = rho_floor;
-  const Real pres = rho*PoverRhoAtR(r_in);
   Real r_cell[NSCALARS];
   for (int n=0; n<NSCALARS; ++n) r_cell[n] = 0.0;
   r_cell[ye_index] = ye_vacuum;
-  const Real egas = pmb->peos->EgasFromRhoP(rho, pres, r_cell);
+  const Real pres = (t_vacuum > 0.0)
+      ? pmb->peos->PresFromRhoT(rho, t_vacuum, r_cell)
+      : rho*PoverRhoAtR(r_in);
+  const Real egas = (t_vacuum > 0.0)
+      ? pmb->peos->EgasFromRhoT(rho, t_vacuum, r_cell)
+      : pmb->peos->EgasFromRhoP(rho, pres, r_cell);
 
   cons(IDN,k,j,i) = rho;
   cons(IM1,k,j,i) = 0.0;

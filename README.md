@@ -21,6 +21,74 @@ Athena++ GRMHD code and adaptive mesh refinement (AMR) framework
 
 Please read [our contributing guidelines](./CONTRIBUTING.md) for details on how to participate.
 
+## Helmholtz-alpha GI disk v4 working notes
+
+- The current problem generator is `gi_disk_3d_eos_v4`. It combines the v3 disk
+  initialization and Helmholtz-alpha EOS, the v3.5 nonuniform polar mesh generator,
+  the v3.6 masked polar cones, and the spherical-harmonic self-gravity port.
+- The v4.1 variant `gi_disk_3d_eos_v41` adds
+  `hydro/helm_Tfloor_temperature`, which defaults to the Helmholtz table minimum
+  ($10^3\,\mathrm{K}$) and may be raised without changing the table. Its atmosphere
+  and masked cones inherit this temperature unless `problem/T_vacuum` is set
+  explicitly. Keep `efloor\le e(\rho_{\rm floor},T_{\rm floor},Y_{e,\rm vacuum})`
+  and `pfloor\le P(\rho_{\rm floor},T_{\rm floor},Y_{e,\rm vacuum})`; otherwise
+  the hydro floors produce a hotter atmosphere. The tested setup used
+  $T_{\rm floor}=10^6\,\mathrm{K}$ and `efloor=pfloor=10^23` in cgs units.
+  Its four-rank smoke run completed $1\,\Omega_{100}^{-1}$ at cycle 125; the
+  atmosphere retained a $10^6\,\mathrm{K}$ minimum while dynamical atmosphere
+  cells heated as high as $1.07\times10^{10}\,\mathrm{K}$. The high atmosphere
+  still loaded the domain strongly, increasing $M/M_0$ to $1.18479$ in one orbit.
+- The v4.2 variant `gi_disk_3d_eos_v42` optionally adds the disk's enclosed
+  monopole mass to the initial centrifugal balance with
+  `problem/rotation_include_disk_monopole=true`. The correction is evaluated as
+  a function of cylindrical radius from the configured surface-density profile,
+  rather than applying a constant velocity multiplier. In the coarse Model 5
+  one-orbit test ($Q=0.5$, $Y_e=0.5$, $\hat c_s=0.05$), the retained mass improved
+  from $M/M_0=0.53929$ without the correction to $0.78864$ with it. The supplied
+  v4.2 input is the corrected, radial-diode case with $r_{\rm out}=200\,r_g$.
+- Configure with spherical-polar coordinates, the general Helmholtz EOS, one passive
+  scalar for $Y_e$, spherical-harmonic gravity, MPI, and FFT support. The Helmholtz
+  table is read from `data/eos/helm_table.dat` when compiling and running from the
+  repository root.
+- The reproducible low-resolution diagnostic input is
+  `inputs/hydro/athinput.gi_disk_v4_model1_r240_lowrho_inneroutflow_outerdiode_4omega_4rank`.
+  It covers $40$--$240\,r_g$ with a constant $\Delta r/r$ grid of
+  $20\times48\times16$ cells and four $10\times48\times8$ meshblocks/ranks. Each
+  block spans the complete nonuniform theta domain, including both polar boundaries.
+- Model 1 uses $Q_{\rm ref}=2$, $Y_e=0.1$, and
+  $(P/\rho)_{100r_g}=8.987551787368176\times10^{16}\,\mathrm{erg\,g^{-1}}$.
+  The active disk is initially truncated at $50$ and $151\,r_g$; the larger numerical
+  radial domain supplies an outer buffer.
+- The tested dilute-atmosphere settings are `rho_floor=1e6`, `dfloor=1e6`,
+  `pfloor=1e23`, `efloor=1e23`, and `helm_Tfloor=true` in cgs units. Keep
+  `qw_rho_min=2e7` so the dilute numerical atmosphere cannot cool or deleptonize
+  through the QW source.
+- The atmosphere `rho_floor` can also be treated as a tunable numerical mass-loading
+  parameter. A moderately higher floor supplies gradual infall that may drive the disk
+  toward $Q\sim1$ when physical cooling is too slow on the simulated timescale. This
+  should be calibrated with $M(t)/M(0)$ and resolution/floor comparisons: it represents
+  atmosphere- or boundary-fed loading, not a physical accretion prescription.
+- The current radial-boundary experiment uses Athena++ built-in outflow at the inner
+  radial face and the pgen user diode at the outer face. The theta mask uses outflow
+  copying at `theta_cut=pi/2-1` while the physical theta boundaries remain polar.
+- Commit `02cc33cc` makes `helm_Tfloor` tolerant of roundoff at the Helmholtz table
+  minimum and prevents HLLC's temporary PVRS wave-speed estimates from querying the
+  EOS with nonpositive density or pressure. The HLLC guard affects intermediate
+  wave-speed estimates, not the evolved cell state.
+- The four-rank diagnostic completed $4\,\Omega_{100}^{-1}$ with smooth timesteps.
+  Its mass changed from $2.47382\times10^{33}$ to $2.57926\times10^{33}\,\mathrm{g}$,
+  or $M/M_0=1.04262$. For comparison, the older $2\times10^7\,\mathrm{g\,cm^{-3}}$
+  atmosphere reached $M/M_0=1.36530$ over the same interval, showing that atmosphere
+  density dominated the artificial mass growth.
+- Restarting the dilute-atmosphere diagnostic from $4$ to
+  $10\,\Omega_{100}^{-1}$ also completed cleanly (cycle 1919). The mass peaked at
+  $M/M_0=1.04620$ near $1.34\,\Omega_{100}^{-1}$ and declined to
+  $2.55497\times10^{33}\,\mathrm{g}$, or $M/M_0=1.03280$, at the final time; there
+  is no continuing secular mass growth in this low-resolution test.
+- At $4\,\Omega_{100}^{-1}$ and $r\simeq103\,r_g$ on the midplane, the dilute run has
+  $\rho=5.36\times10^8\,\mathrm{g\,cm^{-3}}$, $P=7.19\times10^{25}\,\mathrm{erg\,cm^{-3}}$,
+  $T=1.26\times10^9\,\mathrm{K}$, $Y_e=0.1$, and $X_\alpha=0.2$.
+
 ## Citation
 To cite Athena++ in your publication, please use the following BibTeX to refer to the code's [method paper](https://ui.adsabs.harvard.edu/abs/2020ApJS..249....4S/abstract):
 ```

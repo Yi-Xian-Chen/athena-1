@@ -1,0 +1,114 @@
+<comment>
+problem   = Coarse V4.2 Model 5 disk-monopole rotation experiment: Q=0.5, Ye=0.5, chat=0.05, r_out=200 rg, wide active polar region, radial diodes.
+configure = --prob=gi_disk_3d_eos_v42 --coord=spherical_polar --eos=general/helmholtz --nscalars=1 --nghost=2 --grav=sph -mpi -fft --include=/path/to/eigen3
+
+<job>
+problem_id = runs/gi_disk_v42_model5_q0p5_ye0p5_hatc0p05_rout200_r240_diskmonopole_diode_thetacut0p3_1omega_4rank/gi_disk_v42_model5_q0p5_ye0p5_hatc0p05_rout200_r240_diskmonopole_diode_thetacut0p3_1omega_4rank
+
+<output1>
+file_type = hst
+dt = 1.0e-3
+
+<output2>
+file_type = rst
+dt = 2.4628199469805195e-2
+
+<output3>
+file_type = tab
+variable = prim
+dt = 2.4628199469805195e-2
+dcycle = -1
+x3_slice = 0.19634954084936207
+data_format = %.16e
+
+<output4>
+file_type = tab
+variable = user_out_var
+dt = 2.4628199469805195e-2
+dcycle = -1
+x3_slice = 0.19634954084936207
+data_format = %.16e
+
+<time>
+cfl_number = 0.3
+nlim       = -1
+tlim       = 4.925639893961039e-2
+integrator = vl2
+xorder     = 2
+ncycle_out = 10
+
+<mesh>
+x1rat  = 1.0937235477264424
+nx1    = 20
+x1min  = 59066787.64133758
+x1max  = 354400725.8480255
+ix1_bc = user
+ox1_bc = user
+
+x2rat    = -1.0
+nx2      = 48
+x2min    = 0.0
+x2max    = 3.141592653589793
+nth_hi   = 4
+nth_lo   = 20
+h_hi     = 0.20
+dth_pole = 0.07134954084936207
+ix2_bc   = polar
+ox2_bc   = polar
+
+x3rat  = 1.0
+nx3    = 16
+x3min  = 0.0
+x3max  = 6.283185307179586
+ix3_bc = periodic
+ox3_bc = periodic
+
+num_threads = 1
+
+<meshblock>
+nx1 = 10
+nx2 = 48
+nx3 = 8
+
+<hydro>
+dfloor                    = 2.0e7
+pfloor                    = 1.0e23
+efloor                    = 1.0e23
+eos_file_name             = data/eos/helm_table.dat
+eos_file_type             = helm
+helm_assume_defaults      = true
+helm_Tfloor               = true
+helm_Tfloor_temperature   = 1.0e6
+helm_ye_index             = 0
+
+<gravity>
+one_solve_per_cycle = false
+
+<problem>
+GM                       = 1.3271645321000002e27
+r_in_rg                  = 50.0
+r_out_rg                 = 200.0
+r_ref_rg                 = 100.0
+Q_ref                    = 0.5
+# (0.05*c)^2 in cgs.
+pressure_over_rho_ref    = 2.2468862280640000e18
+pressure_over_rho_slope  = -1.0
+Sigma_slope              = -2.0
+Ye0                      = 0.5
+Ye_vacuum                = 0.5
+rho_floor                = 2.0e7
+# In v4.2, omitted T_vacuum inherits hydro/helm_Tfloor_temperature.
+pressure_corrected_rotation = true
+rotation_include_disk_monopole = true
+enable_qw_source         = true
+repair_ye_density_floor  = true
+clamp_ye_conserved       = false
+qw_rho_min               = 2.0e7
+qw_energy_fraction_limit = 0.1
+ye_floor                 = 1.0e-6
+ye_ceil                  = 0.999999
+user_bc                  = diode
+
+# Nearest cell face to the requested 0.3 rad on this theta grid.
+theta_cut                 = 0.28539816339744833
+theta_mask_bc             = outflow

@@ -103,10 +103,21 @@ class HelmTable {
       dd2i_sav(i) = dd2i;
       //dd3i_sav(i) = dd3i;
     }
-    // precission for inversion
+    // precision and optional numerical temperature floor for inversion
     prec = pin->GetOrAddReal("hydro", "helm_prec", 1e-8);
     nmax = pin->GetOrAddInteger("hydro", "helm_nmax", 5000);
     Tfloor = pin->GetOrAddBoolean("hydro", "helm_Tfloor", false);
+    temperature_floor =
+        pin->GetOrAddReal("hydro", "helm_Tfloor_temperature", t(0));
+    if (!std::isfinite(temperature_floor) || temperature_floor < t(0)
+        || temperature_floor >= t(jmax-1)) {
+      std::stringstream msg;
+      msg << "### FATAL ERROR in HelmTable" << std::endl
+          << "hydro/helm_Tfloor_temperature must be finite and satisfy "
+          << t(0) << " <= Tfloor < " << t(jmax-1) << "." << std::endl
+          << "helm_Tfloor_temperature = " << temperature_floor << std::endl;
+      ATHENA_ERROR(msg);
+    }
 
     fi.NewAthenaArray(36);
     // helmholtz free energy and its derivatives
@@ -624,7 +635,10 @@ class HelmTable {
   // index = 0 for internal energy; index = 2 for pressure; var = int energy or pressure
   void HelmInvert(Real rho, Real GuessTemp, Real ye, Real var, int index,
                   AthenaArray<Real> &OutData, bool shifted_energy=false) {
-    Real BrakT[] = {t(0), t(jmax-1)};
+    // Keep the true table minimum as the default.  When requested, a higher
+    // numerical floor simply narrows the inversion interval; the EOS table is
+    // neither altered nor extrapolated.
+    Real BrakT[] = {Tfloor ? temperature_floor : t(0), t(jmax-1)};
     Real BrakVal[] = {0, 0};
     if (var <= 0.0 || !std::isfinite(var)) {
       std::stringstream msg;
@@ -646,6 +660,13 @@ class HelmTable {
     BrakVal[0] = InversionValue(rho, LastTemp, ye, index, shifted_energy, OutData)
                  * InvVar - 1.0;
     Real LastErr = BrakVal[0];
+    // A state generated exactly at the configured floor can round to either
+    // side of the endpoint.  In degenerate material P(T) is very flat and may
+    // admit a distant higher-temperature root, so recognize the endpoint
+    // before entering the iterative inversion.
+    if (Tfloor && std::abs(BrakVal[0]) <= prec) {
+      return;
+    }
     Real delta;
     while (std::abs(error) > prec) {
       if (BrakVal[0] > 0) {//}* BrakVal[1] > 0) {
@@ -758,6 +779,10 @@ class HelmTable {
     return corrected_energy_density + BindingEnergyDensity(den, temp, ye);
   }
 
+  Real ApplyTemperatureFloor(Real temp) const {
+    return Tfloor ? std::max(temp, temperature_floor) : temp;
+  }
+
   private:
   Real BindingEnergyDensity(Real den, Real temp, Real ye) {
     using namespace HelmholtzConstants;  // NOLINT (build/namespace)
@@ -850,6 +875,7 @@ class HelmTable {
   Real prec;
   int nmax;
   bool Tfloor;
+  Real temperature_floor;
   AthenaArray<Real> f, ft, ftt, fd, fdd, fdt, fddt, fdtt, fddtt, fi;
   AthenaArray<Real> dpdf, dpdft, dpdfd, dpdfdt;
   AthenaArray<Real> xf, xft, xfd, xfdt;
@@ -1052,6 +1078,7 @@ Real EquationOfState::TFromRhoP(Real rho, Real pres) {
 
 Real EquationOfState::PresFromRhoT(Real rho, Real T, Real* r) {
   Real ye = YeFromScalars(r, rho, false, "EquationOfState::PresFromRhoT");
+  T = phelm->ApplyTemperatureFloor(T);
   phelm->HelmLookupRhoT(rho * rho_unit_, T, ye, EosData);
   LastTemp = T;
   return EosData(2) * inv_egas_unit_;
@@ -1063,6 +1090,7 @@ Real EquationOfState::PresFromRhoT(Real rho, Real T) {
 
 Real EquationOfState::EgasFromRhoT(Real rho, Real T, Real* r) {
   Real ye = YeFromScalars(r, rho, false, "EquationOfState::EgasFromRhoT");
+  T = phelm->ApplyTemperatureFloor(T);
   phelm->HelmLookupRhoT(rho * rho_unit_, T, ye, EosData);
   LastTemp = T;
   return phelm->ShiftedEnergyDensity(rho * rho_unit_, T, ye, EosData(0))
@@ -1093,6 +1121,7 @@ Real EquationOfState::TFromRhoEgas(Real rho, Real egas) {
 
 Real EquationOfState::XalphaFromRhoTYe(Real rho, Real temp, Real ye) {
   ye = RequireValidYe(ye, "EquationOfState::XalphaFromRhoTYe");
+  temp = phelm->ApplyTemperatureFloor(temp);
   return phelm->XalphaFromRhoTYe(rho * rho_unit_, temp, ye);
 }
 

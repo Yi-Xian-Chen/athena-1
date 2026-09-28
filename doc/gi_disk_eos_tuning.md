@@ -165,6 +165,19 @@ Diagnostics to record:
 - minimum/maximum `rho`, `P`, `T`, `Ye`, `Xalpha`
 - whether low-density cells generate large velocities or energy changes
 
+## Low-temperature Saha underflow note
+
+The alpha Saha factor contains `exp(-Qalpha/kT)` with
+`Qalpha = 28.295674 MeV`. In double precision this factor underflows to exactly
+zero below approximately `T = 4.4e8 K`. At alpha saturation, especially near
+`Ye = 0.5`, this can make both free-nucleon fractions and both analytical weak
+capture terms exactly zero. A root finder can then report a spurious
+`Ye_eq = 0.5`, producing an artificial discontinuity near `4.5e8 K` in
+equilibrium maps. This is not caused by the hydro temperature, pressure, or
+density floors. Revisit this by evaluating the Saha relation and capture-rate
+balance in log space, or mark cells with negligible weak rates as frozen out
+rather than assigning a formal equilibrium.
+
 ## Semi-Production Baseline
 
 For now, the preferred semi-production atmosphere is deliberately simple:
