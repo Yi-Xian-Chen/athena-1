@@ -399,8 +399,12 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   // Optional zero-step reference-state probe used by
   // scripts/probe_reference_state.py.  Keeping the EOS call here guarantees
   // that diagnostics use the same compiled Helmholtz implementation as a run.
-  if (Globals::my_rank == 0
-      && pin->GetOrAddBoolean("problem", "eos_reference_probe", false)) {
+  // GetOrAdd calls must execute on every MPI rank: restart offsets are computed
+  // from each rank's local parameter dump, so rank-dependent parameter lists
+  // corrupt the parallel restart layout.
+  const bool eos_reference_probe =
+      pin->GetOrAddBoolean("problem", "eos_reference_probe", false);
+  if (Globals::my_rank == 0 && eos_reference_probe) {
     const Real probe_rho = pin->GetReal("problem", "eos_probe_rho");
     const Real probe_pres = pin->GetReal("problem", "eos_probe_pressure");
     const Real probe_ye = pin->GetReal("problem", "eos_probe_ye");
